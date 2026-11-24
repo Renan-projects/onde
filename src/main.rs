@@ -7,6 +7,8 @@ mod audio;
 mod autostart;
 mod config;
 mod desktop;
+mod layout;
+mod lockscreen;
 mod render;
 mod shaders;
 mod util;
@@ -89,6 +91,19 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("--capture-bureau") => {
+            // --capture-bureau <fond|fichier.hlsl> <sortie.bmp> [échelle %] [temps]
+            console();
+            let id = args.get(1).cloned().unwrap_or_else(|| "aurore".into());
+            let out = args.get(2).cloned().unwrap_or_else(|| "bureau.bmp".into());
+            let scale = args.get(3).and_then(|v| v.parse::<f32>().ok()).unwrap_or(50.0) / 100.0;
+            let t = args.get(4).and_then(|v| v.parse().ok()).unwrap_or(12.0);
+            let src = shaders::source(&id).or_else(|| std::fs::read_to_string(&id).ok()).unwrap_or_default();
+            if let Err(e) = render::capture_desktop(&src, &id, scale, t, std::path::Path::new(&out)) {
+                println!("{e}");
+                std::process::exit(1);
+            }
+        }
         Some("--quitter") => unsafe {
             use crate::util::WStr;
             use windows::core::PCWSTR;
@@ -104,13 +119,17 @@ fn main() {
             let mons = desktop::monitors();
             for m in &mons {
                 println!(
-                    "écran {:?} travail {:?} {} Hz",
+                    "écran {:?} travail {:?} {} Hz, {} ppp",
                     (m.rect.left, m.rect.top, m.rect.right, m.rect.bottom),
                     (m.work.left, m.work.top, m.work.right, m.work.bottom),
-                    m.refresh
+                    m.refresh,
+                    m.dpi
                 );
             }
             println!("masqués : {:?}", desktop::covered_monitors(&mons));
+            for (i, class, title) in desktop::culprits(&mons) {
+                println!("  écran {i} masqué par [{class}] « {title} »");
+            }
         }
         _ => app::run(),
     }

@@ -66,6 +66,8 @@ pub struct Monitor {
     pub rect: RECT,
     pub work: RECT,
     pub refresh: u32,
+    /// Points par pouce effectifs (96 = 100 %).
+    pub dpi: u32,
 }
 
 pub fn monitors() -> Vec<Monitor> {
@@ -82,7 +84,26 @@ pub fn monitors() -> Vec<Monitor> {
                 } else {
                     60
                 };
-            out.push(Monitor { handle: hmon, rect: mi.monitorInfo.rcMonitor, work: mi.monitorInfo.rcWork, refresh });
+            let (mut dx, mut dy) = (96u32, 96u32);
+            let dpi = if windows::Win32::UI::HiDpi::GetDpiForMonitor(
+                hmon,
+                windows::Win32::UI::HiDpi::MDT_EFFECTIVE_DPI,
+                &mut dx,
+                &mut dy,
+            )
+            .is_ok()
+            {
+                dx
+            } else {
+                96
+            };
+            out.push(Monitor {
+                handle: hmon,
+                rect: mi.monitorInfo.rcMonitor,
+                work: mi.monitorInfo.rcWork,
+                refresh,
+                dpi,
+            });
         }
         true.into()
     }
@@ -157,7 +178,7 @@ pub fn create_hosts(host: &Host, mons: &[Monitor]) -> Vec<SurfaceDesc> {
                 let _ = SetWindowPos(hwnd, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             }
         }
-        out.push(SurfaceDesc { hwnd: hwnd.0 as isize, rect: m.rect, refresh: m.refresh });
+        out.push(SurfaceDesc { hwnd: hwnd.0 as isize, rect: m.rect, refresh: m.refresh, dpi: m.dpi });
     }
     if let (Some(_), Some(ww)) = (host.defview, host.workerw) {
         // L'image de fond de Windows passe sous toutes nos fenêtres.
@@ -209,13 +230,24 @@ fn covers(outer: &RECT, inner: &RECT) -> bool {
 struct Scan<'a> {
     mons: &'a [Monitor],
     covered: Vec<bool>,
+    /// Diagnostic : fenêtres responsables (écran, classe, titre).
+    culprits: Option<Vec<(usize, String, String)>>,
 }
 
 /// Pour chaque écran : est-il entièrement caché par une fenêtre
 /// (agrandie ou plein écran) ? Parcours des fenêtres de premier niveau,
 /// quelques microsecondes.
 pub fn covered_monitors(mons: &[Monitor]) -> Vec<bool> {
-    let mut scan = Scan { mons, covered: vec![false; mons.len()] };
+    scan(mons, false).0
+}
+
+/// Diagnostic : quelles fenêtres masquent quels écrans.
+pub fn culprits(mons: &[Monitor]) -> Vec<(usize, String, String)> {
+    scan(mons, true).1
+}
+
+fn scan(mons: &[Monitor], diag: bool) -> (Vec<bool>, Vec<(usize, String, String)>) {
+    let mut scan = Scan { mons, covered: vec![false; mons.len()], culprits: diag.then(Vec::new) };
     unsafe extern "system" fn each(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let scan = &mut *(lparam.0 as *mut Scan);
         if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
@@ -245,6 +277,11 @@ pub fn covered_monitors(mons: &[Monitor]) -> Vec<bool> {
         for (i, m) in scan.mons.iter().enumerate() {
             if covers(&r, &m.work) || (zoomed && hmon == m.handle) {
                 scan.covered[i] = true;
+                if let Some(c) = scan.culprits.as_mut() {
+                    let mut t = [0u16; 128];
+                    let n = GetWindowTextW(hwnd, &mut t);
+                    c.push((i, class_name(hwnd), String::from_utf16_lossy(&t[..n.max(0) as usize])));
+                }
             }
         }
         true.into()
@@ -252,7 +289,7 @@ pub fn covered_monitors(mons: &[Monitor]) -> Vec<bool> {
     unsafe {
         let _ = EnumWindows(Some(each), LPARAM(&mut scan as *mut _ as isize));
     }
-    scan.covered
+    (scan.covered, scan.culprits.unwrap_or_default())
 }
 
 /// Le bureau est-il au premier plan (aucune application active) ?

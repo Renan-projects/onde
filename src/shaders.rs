@@ -92,18 +92,19 @@ float4 VS(uint id : SV_VertexID) : SV_Position {
 /// équivalences GLSL pour porter facilement un shader Shadertoy.
 pub const PRELUDE: &str = r#"
 cbuffer Onde : register(b0) {
-    float3 iResolution;   // taille de rendu en pixels
+    float3 iResolution;   // taille du fond en pixels de rendu (tout le bureau en mode continu)
     float  iTime;         // secondes (vitesse réglable)
     float4 iMouse;        // xy : souris en pixels (origine en bas à gauche), zw : dernier clic
     float4 uSon;          // x graves, y médiums, z aigus, w volume (0..1, lissés)
     float4 uClics[4];     // xy : position en pixels, z : âge en secondes (99 = aucun)
-    float2 uSouris;       // souris en 0..1 (-1 si elle est sur un autre écran)
-    float  uPresence;     // 0..1 : la souris est sur cet écran et bouge
+    float2 uSouris;       // souris en 0..1 sur le fond (-1 si elle est hors du fond)
+    float  uPresence;     // 0..1 : la souris est sur le fond et bouge
     float  uHeure;        // heure locale, 0..24
-    float  uEcran;        // numéro de l'écran
+    float  uEcran;        // numéro de l'écran (0 partout en mode continu)
     float  iTimeDelta;
     float  iFrame;
     float  uPad;
+    float4 uVue;          // place de l'écran dans le fond : xy décalage, z pixels du fond par pixel de rendu, w numéro réel de l'écran
 };
 #define vec2 float2
 #define vec3 float3
@@ -121,7 +122,8 @@ float3 mod(float3 x, float  y) { return x - y * floor(x / y); }
 
 pub const EPILOGUE: &str = r#"
 float4 PS(float4 pos : SV_Position) : SV_Target {
-    float2 fc = float2(pos.x, iResolution.y - pos.y);
+    // Coordonnées dans le fond entier : continues d'un écran à l'autre.
+    float2 fc = float2(uVue.x + pos.x * uVue.z, uVue.y - pos.y * uVue.z);
     float3 c = saturate(mainImage(fc).rgb);
     // Tramage léger : évite les bandes dans les dégradés en 8 bits.
     float n = frac(sin(dot(pos.xy + frac(iTime) * 61.0, float2(12.9898, 78.233))) * 43758.5453);

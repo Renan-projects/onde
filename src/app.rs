@@ -3,12 +3,12 @@
 //! `GetMessageW` ; un minuteur de 750 ms + quelques événements système
 //! suffisent à suivre l'état du bureau.
 
-use crate::config::{Config, FPS_CHOICES, SCALE_CHOICES, SPEED_CHOICES};
+use crate::config::{fps_label, Config, FPS_CHOICES, FPS_ECRAN, FPS_ILLIMITE, SCALE_CHOICES, SPEED_CHOICES};
 use crate::desktop::{self, Host, Monitor};
 use crate::render::{self, Settings, Shared};
 use crate::shaders::{self, Entry};
 use crate::util::{self, WStr};
-use crate::{autostart, log};
+use crate::{autostart, lockscreen, log};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::Arc;
@@ -43,6 +43,10 @@ const TIMER_EVAL: usize = 1;
 const TIMER_RELOAD: usize = 2;
 const TIMER_REATTACH: usize = 3;
 const TIMER_FORCE_QUIT: usize = 4;
+const TIMER_LOCKSCREEN: usize = 5;
+/// L'image de l'écran de verrouillage est rafraîchie toutes les heures
+/// (les fonds qui suivent l'heure du jour changent d'allure).
+const LOCKSCREEN_PERIOD_MS: u32 = 60 * 60 * 1000;
 
 const ID_FOND: usize = 1000;
 const ID_FPS: usize = 300;
@@ -57,6 +61,8 @@ const ID_DOSSIER: usize = 405;
 const ID_AUTOSTART: usize = 406;
 const ID_JOURNAL: usize = 407;
 const ID_QUIT: usize = 408;
+const ID_CONTINU: usize = 409;
+const ID_VERROU: usize = 410;
 
 struct App {
     hwnd: HWND,
@@ -97,6 +103,7 @@ fn settings_of(c: &Config) -> Settings {
         speed: c.vitesse as f32 / 100.0,
         audio: c.son,
         mouse: c.souris,
+        span: c.continu,
     }
 }
 
@@ -190,6 +197,7 @@ pub fn run() {
         // WINEVENT_OUTOFCONTEXT (0) | WINEVENT_SKIPOWNPROCESS (2)
         SetWinEventHook(0x0003, 0x0017, None, Some(win_event), 0, 0, 0x0002);
         SetTimer(Some(hwnd), TIMER_EVAL, 750, None);
+        SetTimer(Some(hwnd), TIMER_LOCKSCREEN, LOCKSCREEN_PERIOD_MS, None);
 
         add_icon();
         watch_user_dir(hwnd);
@@ -341,9 +349,32 @@ fn load_shader() {
         (a.shared.clone(), a.shader_gen)
     });
     shared.update(|c| {
-        c.shader = Some((file, src));
+        c.shader = Some((file.clone(), src.clone()));
         c.shader_gen = gen;
     });
+    refresh_lockscreen(file, src);
+}
+
+/// Recopie une image du fond sur l'écran de verrouillage (si l'option est active),
+/// à la taille de l'écran principal.
+fn refresh_lockscreen(file: String, src: String) {
+    let (on, mons) = with(|a| (a.cfg.verrouillage, a.mons.clone()));
+    if !on {
+        return;
+    }
+    let mons = if mons.is_empty() { desktop::monitors() } else { mons };
+    let primary = mons.iter().find(|m| m.rect.left == 0 && m.rect.top == 0).or(mons.first());
+    let (w, h) = primary
+        .map(|m| ((m.rect.right - m.rect.left).max(16) as u32, (m.rect.bottom - m.rect.top).max(16) as u32))
+        .unwrap_or((1920, 1080));
+    lockscreen::update(file, src, w, h);
+}
+
+fn refresh_lockscreen_current() {
+    let id = with(|a| a.cfg.fond.clone());
+    if let Some(src) = shaders::source(&id) {
+        refresh_lockscreen(id.trim_start_matches("perso:").to_string(), src);
+    }
 }
 
 fn push_settings() {
@@ -461,6 +492,11 @@ unsafe fn append(menu: HMENU, flags: MENU_ITEM_FLAGS, id: usize, text: &str) {
     let _ = AppendMenuW(menu, flags, id, WStr::new(text).pcwstr());
 }
 
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
 fn check(on: bool) -> MENU_ITEM_FLAGS {
     if on {
         MF_CHECKED
@@ -515,19 +551,37 @@ fn show_menu() {
 
         let fps = CreatePopupMenu().unwrap();
         for (i, v) in FPS_CHOICES.iter().enumerate() {
-            append(fps, radio | check(*v == cfg.fps), ID_FPS + i, &format!("{v} images/s"));
+            let note = match *v {
+                30 => " (conseillé)",
+                FPS_ECRAN => " (le plus fluide)",
+                FPS_ILLIMITE => " (test : consomme beaucoup)",
+                _ => "",
+            };
+            if *v == FPS_ECRAN {
+                append(fps, MF_SEPARATOR, 0, "");
+            }
+            let label = fps_label(*v);
+            let label = if *v == FPS_ECRAN || *v == FPS_ILLIMITE { capitalize(&label) } else { label };
+            append(fps, radio | check(*v == cfg.fps), ID_FPS + i, &format!("{label}{note}"));
         }
-        append(menu, MF_POPUP, fps.0 as usize, &format!("Fluidité : {} images/s", cfg.fps));
+        if !FPS_CHOICES.contains(&cfg.fps) {
+            append(fps, radio | MF_CHECKED | MF_GRAYED, 0, &format!("{} (onde.ini)", fps_label(cfg.fps)));
+        }
+        append(menu, MF_POPUP, fps.0 as usize, &format!("Fluidité : {}", fps_label(cfg.fps)));
 
         let scale = CreatePopupMenu().unwrap();
         for (i, v) in SCALE_CHOICES.iter().enumerate() {
             let note = match v {
-                100 => " (le plus net)",
+                200 => " (suréchantillonnage, lourd)",
+                100 => " (net)",
                 50 => " (conseillé)",
-                25 => " (le plus léger)",
+                10 => " (le plus léger)",
                 _ => "",
             };
             append(scale, radio | check(*v == cfg.echelle), ID_SCALE + i, &format!("{v} %{note}"));
+        }
+        if !SCALE_CHOICES.contains(&cfg.echelle) {
+            append(scale, radio | MF_CHECKED | MF_GRAYED, 0, &format!("{} % (onde.ini)", cfg.echelle));
         }
         append(menu, MF_POPUP, scale.0 as usize, &format!("Résolution de rendu : {} %", cfg.echelle));
 
@@ -535,11 +589,17 @@ fn show_menu() {
         for (i, v) in SPEED_CHOICES.iter().enumerate() {
             append(speed, radio | check(*v == cfg.vitesse), ID_SPEED + i, &format!("{v} %"));
         }
+        if !SPEED_CHOICES.contains(&cfg.vitesse) {
+            append(speed, radio | MF_CHECKED | MF_GRAYED, 0, &format!("{} % (onde.ini)", cfg.vitesse));
+        }
         append(menu, MF_POPUP, speed.0 as usize, &format!("Vitesse d'animation : {} %", cfg.vitesse));
 
         append(menu, MF_SEPARATOR, 0, "");
         append(menu, MF_STRING | check(cfg.souris), ID_SOURIS, "Réagir à la souris et aux clics");
         append(menu, MF_STRING | check(cfg.son), ID_SON, "Réagir au son");
+        append(menu, MF_SEPARATOR, 0, "");
+        append(menu, MF_STRING | check(cfg.continu), ID_CONTINU, "Un seul fond continu sur tous les écrans");
+        append(menu, MF_STRING | check(cfg.verrouillage), ID_VERROU, "Aussi sur l'écran de verrouillage (image fixe)");
         append(menu, MF_SEPARATOR, 0, "");
         append(menu, MF_STRING | check(cfg.pause_batterie), ID_PAUSE_BATT, "Pause sur batterie et en économiseur");
         append(
@@ -588,6 +648,18 @@ fn on_command(cmd: usize, autostart_on: bool) {
         ID_SON => {
             change(|cfg| cfg.son = !cfg.son);
             push_settings();
+        }
+        ID_CONTINU => {
+            change(|cfg| cfg.continu = !cfg.continu);
+            push_settings();
+        }
+        ID_VERROU => {
+            change(|cfg| cfg.verrouillage = !cfg.verrouillage);
+            if with(|a| a.cfg.verrouillage) {
+                refresh_lockscreen_current();
+            } else {
+                lockscreen::restore();
+            }
         }
         ID_SOURIS => {
             change(|cfg| cfg.souris = !cfg.souris);
@@ -670,6 +742,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                 }
                 TIMER_FORCE_QUIT => finish(),
+                TIMER_LOCKSCREEN => refresh_lockscreen_current(),
                 TIMER_REATTACH => {
                     let _ = KillTimer(Some(hwnd), TIMER_REATTACH);
                     attach();
