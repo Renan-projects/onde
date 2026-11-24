@@ -31,36 +31,25 @@ pub fn update(id: String, source: String, w: u32, h: u32) {
         return;
     }
     let _ = std::thread::Builder::new().name("verrouillage".into()).spawn(move || {
-        // Le service de Windows qui traite l'image peut ne pas répondre (système
-        // à court de mémoire virtuelle, disque plein…) : l'appel expire après
-        // 30 s. On réessaie alors deux fois, à 5 minutes d'intervalle.
-        for attempt in 0..3 {
-            let t0 = std::time::Instant::now();
-            match apply(&id, &source, w, h) {
-                Ok(path) => {
-                    crate::log!(
-                        "écran de verrouillage : image de « {id} » {w}×{h} appliquée en {} ms ({})",
-                        t0.elapsed().as_millis(),
-                        path.display()
-                    );
-                    break;
+        // Sur certains Windows 11 (26H2, build 26300), l'appel n'aboutit jamais
+        // depuis une application non empaquetée : délai dépassé (0x800705B4)
+        // après 30 s. Pas de nouvel essai rapproché : le minuteur horaire de
+        // l'interface s'en charge (voir docs/ECRAN_DE_VERROUILLAGE.md).
+        let t0 = std::time::Instant::now();
+        match apply(&id, &source, w, h) {
+            Ok(path) => crate::log!(
+                "écran de verrouillage : image de « {id} » {w}×{h} appliquée en {} ms ({})",
+                t0.elapsed().as_millis(),
+                path.display()
+            ),
+            Err(e) => crate::log!(
+                "écran de verrouillage : échec ({e}){}",
+                if e.contains("0x800705B4") {
+                    " — Windows ne répond pas à la demande (voir docs/ECRAN_DE_VERROUILLAGE.md)"
+                } else {
+                    ""
                 }
-                Err(e) => {
-                    let timeout = e.contains("0x800705B4");
-                    crate::log!(
-                        "écran de verrouillage : échec ({e}){}",
-                        if timeout {
-                            " — service de Windows sans réponse (mémoire ou disque saturés ?)"
-                        } else {
-                            ""
-                        }
-                    );
-                    if !timeout || attempt == 2 {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_secs(300));
-                }
-            }
+            ),
         }
         BUSY.store(false, Ordering::Release);
     });

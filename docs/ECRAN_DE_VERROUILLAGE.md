@@ -50,8 +50,28 @@ Coût : quelques centaines de millisecondes de CPU/GPU une fois par heure.
 - `SetImageFileAsync` avec une image **différente** de l'actuelle : **délai dépassé
   (0x800705B4) après 30 s**, depuis Onde comme depuis PowerShell (STA ou MTA, PNG ou JPEG).
   Avec l'image déjà en place, l'appel répond en 43 ms (aucun travail à faire).
-- Au même moment, le journal Système signalait « Le fichier de pagination est
-  insuffisant » : disque C: plein (≈ 500 Mo libres) et mémoire saturée. Le service de
-  Windows qui transforme l'image ne répond pas dans ces conditions.
-- Onde réessaie alors deux fois à 5 minutes d'intervalle, puis toutes les heures.
-  À revérifier une fois de l'espace libéré sur C:.
+- Le disque C: était alors plein (pagination insuffisante), mais **le même échec persiste
+  avec 85 Go libres** (25/11, 00:20) : ce n'était pas la cause.
+- Autres essais, tous en échec : `SetImageStreamAsync` (même délai dépassé) ; appel
+  depuis une fenêtre au premier plan qui pompe les messages (même délai) ;
+  `UserProfilePersonalizationSettings.TrySetLockScreenImageAsync` → `False` en 10 ms
+  (attendu : cette API exige une application empaquetée). Aucune stratégie de groupe,
+  aucun service désactivé en cause ; Windows 11 26H2 build 26300.9974 (canal normal).
+- **Conclusion : sur ce Windows, poser l'image de l'écran de verrouillage depuis une
+  application de bureau non empaquetée n'aboutit pas.** Onde garde la tentative toutes les
+  heures (coût négligeable : un thread qui attend 30 s), au cas où une mise à jour de
+  Windows corrige le service.
+
+## Pistes qui marcheraient (décision de Renan)
+
+1. **PersonalizationCSP avec droits admin, une seule fois** : une commande élevée (UAC)
+   écrit `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP`
+   (`LockScreenImagePath`, `LockScreenImageUrl` → un PNG qu'Onde met à jour,
+   `LockScreenImageStatus = 1`). Inconvénient : l'image devient imposée (plus modifiable
+   dans Paramètres tant que la clé existe) ; à confirmer si Windows relit le fichier à
+   chaque verrouillage ou seulement à l'application de la stratégie.
+2. **Empaqueter Onde (MSIX avec identité de paquet, même « sparse package »)** : rend
+   `TrySetLockScreenImageAsync` utilisable sans droits. Demande un certificat de signature
+   et une installation différente.
+3. **Manuel** : Paramètres → Personnalisation → Écran de verrouillage → Parcourir →
+   `%APPDATA%\Onde\verrouillage-a.png` (image fixe, mise à jour seulement si on recommence).

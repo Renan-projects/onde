@@ -38,6 +38,11 @@ l'écran de verrouillage, à chaque changement de fond puis toutes les heures.
 Sans droits administrateur (API `Windows.System.UserProfile.LockScreen`).
 L'image d'origine est sauvegardée et remise quand on décoche l'option.
 
+> **État actuel** : sur Windows 11 26H2 (build 26300), Windows laisse expirer la
+> demande quand elle vient d'une application non empaquetée ; l'image n'est donc pas
+> encore posée sur ce système. Onde réessaie toutes les heures. Pistes et essais :
+> [docs/ECRAN_DE_VERROUILLAGE.md](docs/ECRAN_DE_VERROUILLAGE.md).
+
 Limites de Windows : l'écran de verrouillage appartient à LockApp, sur un
 bureau protégé où aucune application ne peut dessiner ; il ne peut donc pas
 être **animé**. Si « Windows à la une » (Spotlight) est actif, le choix
