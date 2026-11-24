@@ -31,15 +31,36 @@ pub fn update(id: String, source: String, w: u32, h: u32) {
         return;
     }
     let _ = std::thread::Builder::new().name("verrouillage".into()).spawn(move || {
-        let t0 = std::time::Instant::now();
-        let r = apply(&id, &source, w, h);
-        match r {
-            Ok(path) => crate::log!(
-                "écran de verrouillage : image de « {id} » {w}×{h} appliquée en {} ms ({})",
-                t0.elapsed().as_millis(),
-                path.display()
-            ),
-            Err(e) => crate::log!("écran de verrouillage : échec ({e})"),
+        // Le service de Windows qui traite l'image peut ne pas répondre (système
+        // à court de mémoire virtuelle, disque plein…) : l'appel expire après
+        // 30 s. On réessaie alors deux fois, à 5 minutes d'intervalle.
+        for attempt in 0..3 {
+            let t0 = std::time::Instant::now();
+            match apply(&id, &source, w, h) {
+                Ok(path) => {
+                    crate::log!(
+                        "écran de verrouillage : image de « {id} » {w}×{h} appliquée en {} ms ({})",
+                        t0.elapsed().as_millis(),
+                        path.display()
+                    );
+                    break;
+                }
+                Err(e) => {
+                    let timeout = e.contains("0x800705B4");
+                    crate::log!(
+                        "écran de verrouillage : échec ({e}){}",
+                        if timeout {
+                            " — service de Windows sans réponse (mémoire ou disque saturés ?)"
+                        } else {
+                            ""
+                        }
+                    );
+                    if !timeout || attempt == 2 {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(300));
+                }
+            }
         }
         BUSY.store(false, Ordering::Release);
     });

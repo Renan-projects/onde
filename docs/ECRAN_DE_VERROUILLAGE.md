@@ -8,7 +8,7 @@
 | Remplacer LockApp / injecter dans LogonUI | oui | oui + système modifié | Non : fragile, cassé à chaque mise à jour, assimilable à un logiciel malveillant. |
 | `HKLM\…\PersonalizationCSP` (`LockScreenImagePath`, `LockScreenImageStatus`) | non | **oui** | Non : demande les droits administrateur, et l'image est alors imposée (l'utilisateur ne peut plus la changer dans Paramètres). |
 | Stratégie « Forcer une image d'écran de verrouillage » | non | oui (et éditions Pro/Entreprise) | Non, même raison. |
-| API WinRT `Windows.System.UserProfile.LockScreen.SetImageFileAsync` | non | **non** | **Oui.** Fonctionne depuis une application de bureau non empaquetée (vérifié sur Windows 11 25H2, build 26300). |
+| API WinRT `Windows.System.UserProfile.LockScreen.SetImageFileAsync` | non | **non** | **Oui.** Accessible depuis une application de bureau non empaquetée, sans droits (appel accepté sur Windows 11 build 26300 ; voir l'état des essais ci-dessous). |
 
 Wallpaper Engine et Lively font le même constat : ils proposent au mieux une
 image fixe pour l'écran de verrouillage.
@@ -43,3 +43,15 @@ Coût : quelques centaines de millisecondes de CPU/GPU une fois par heure.
   verrouillage suivant.
 - Un seul fond pour tous les écrans : l'écran de verrouillage montre la même
   image partout ; elle est rendue à la taille de l'écran principal.
+
+## État des essais (24/11/2026, PC de Renan)
+
+- Sauvegarde de l'image d'origine, rendu et encodage PNG : **OK**.
+- `SetImageFileAsync` avec une image **différente** de l'actuelle : **délai dépassé
+  (0x800705B4) après 30 s**, depuis Onde comme depuis PowerShell (STA ou MTA, PNG ou JPEG).
+  Avec l'image déjà en place, l'appel répond en 43 ms (aucun travail à faire).
+- Au même moment, le journal Système signalait « Le fichier de pagination est
+  insuffisant » : disque C: plein (≈ 500 Mo libres) et mémoire saturée. Le service de
+  Windows qui transforme l'image ne répond pas dans ces conditions.
+- Onde réessaie alors deux fois à 5 minutes d'intervalle, puis toutes les heures.
+  À revérifier une fois de l'espace libéré sur C:.

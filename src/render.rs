@@ -295,6 +295,9 @@ struct Surface {
     due: Instant,
     presence: f32,
     frames: u32,
+    /// Une image doit être dessinée même en pause (écran tout neuf, fond
+    /// ou réglage changé) : sinon le bureau garderait l'image de Windows.
+    stale: bool,
     /// Place de l'écran dans le fond (continu ou propre à l'écran).
     world: World,
     view: View,
@@ -390,6 +393,7 @@ impl Surface {
             due: Instant::now(),
             presence: 0.0,
             frames: 0,
+            stale: true,
             world: World::default(),
             view: View::default(),
         })
@@ -511,6 +515,7 @@ pub fn run(shared: Arc<Shared>, ui: isize) {
     let mut stats = (Instant::now(), 0u32);
     // Temps CPU passé à préparer / dessiner / présenter (pour le journal).
     let mut cost = [0f64; 3];
+    let mut wakeups = 0u32;
 
     loop {
         // 1. Lire les changements demandés par l'interface.
@@ -570,6 +575,7 @@ pub fn run(shared: Arc<Shared>, ui: isize) {
                         shader_audio = shaders::uses_audio(&src);
                         crate::log!("fond « {file} » compilé (son : {shader_audio})");
                         post(ui, WM_SHADER_OK, 0, None);
+                        surfaces.iter_mut().for_each(|s| s.stale = true);
                     }
                     Err(e) => {
                         crate::log!("erreur de compilation de {file} :\n{e}");
@@ -603,6 +609,7 @@ pub fn run(shared: Arc<Shared>, ui: isize) {
         }
         if surfaces_gen.is_some() || rebuild || replace {
             place(&mut surfaces, settings.span, settings.scale);
+            surfaces.iter_mut().for_each(|s| s.stale = true);
         }
         if let Some(gen) = surfaces_gen {
             // Les anciennes fenêtres hôtes ne sont plus utilisées : l'interface peut les détruire.
@@ -611,10 +618,14 @@ pub fn run(shared: Arc<Shared>, ui: isize) {
 
         // 2. Écrans à animer.
         let live: Vec<usize> = (0..surfaces.len())
-            .filter(|&i| g.ps.is_some() && active.get(surfaces[i].index).copied().unwrap_or(false))
+            .filter(|&i| {
+                g.ps.is_some() && (surfaces[i].stale || active.get(surfaces[i].index).copied().unwrap_or(false))
+            })
             .collect();
 
-        let want_audio = settings.audio && shader_audio && !live.is_empty();
+        // Le son ne sert qu'à l'animation : pas pour une image isolée en pause.
+        let animating = live.iter().any(|&i| active.get(surfaces[i].index).copied().unwrap_or(false));
+        let want_audio = settings.audio && shader_audio && animating;
         if !want_audio {
             audio = None;
         } else if audio.is_none() && Instant::now() >= audio_retry {
@@ -649,7 +660,11 @@ pub fn run(shared: Arc<Shared>, ui: isize) {
         let mut earliest: Option<Instant> = None;
         for &i in &live {
             let s = &surfaces[i];
-            if s.ready {
+            // Image pas encore due (cadence bridée) : on ne dort que sur le
+            // minuteur, l'objet d'attente sera consommé ensuite sans attendre.
+            // Un seul réveil par image au lieu de deux.
+            let early = !s.ready && timer.is_some() && s.due > now + std::time::Duration::from_millis(1);
+            if s.ready || early {
                 earliest = Some(earliest.map_or(s.due, |e| e.min(s.due)));
             } else if let Some(h) = s.waitable {
                 handles.push(h);
@@ -673,7 +688,12 @@ pub fn run(shared: Arc<Shared>, ui: isize) {
             }
         }
         let n_waitables = owners.len();
+        let slept = Instant::now();
         let r = unsafe { WaitForMultipleObjects(&handles, false, timeout) }.0;
+        // Réveils réels (attentes qui ont bloqué), pour le journal.
+        if slept.elapsed() > std::time::Duration::from_micros(200) {
+            wakeups += 1;
+        }
         if r == WAIT_OBJECT_0.0 {
             continue;
         } else if r > WAIT_OBJECT_0.0 && ((r - WAIT_OBJECT_0.0) as usize) <= n_waitables {
@@ -765,6 +785,7 @@ pub fn run(shared: Arc<Shared>, ui: isize) {
             cost[1] += (t1 - t0).as_secs_f64();
             cost[2] += t1.elapsed().as_secs_f64();
             s.ready = s.waitable.is_none();
+            s.stale = false;
             if let Some(p) = s.period {
                 let next = s.due + p;
                 s.due = if next < now { now } else { next };
@@ -779,15 +800,17 @@ pub fn run(shared: Arc<Shared>, ui: isize) {
         if stats.0.elapsed().as_secs() >= 60 {
             let per = |c: f64| c * 1e6 / stats.1.max(1) as f64;
             crate::log!(
-                "{:.1} images/s sur {} écran(s) ; par image : préparation {:.0} µs, dessin {:.0} µs, présentation {:.0} µs",
+                "{:.1} images/s sur {} écran(s), {:.1} réveils/s ; par image : préparation {:.0} µs, dessin {:.0} µs, présentation {:.0} µs",
                 stats.1 as f32 / 60.0,
                 live.len(),
+                wakeups as f32 / 60.0,
                 per(cost[0]),
                 per(cost[1]),
                 per(cost[2])
             );
             stats = (Instant::now(), 0);
             cost = [0.0; 3];
+            wakeups = 0;
         }
         if lost {
             crate::log!("carte graphique perdue (pilote mis à jour ?) : réinitialisation");
