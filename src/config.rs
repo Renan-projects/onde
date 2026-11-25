@@ -100,7 +100,8 @@ impl Config {
 
     pub fn parse(text: &str) -> Config {
         let mut c = Config::default();
-        for line in text.lines() {
+        // Le Bloc-notes enregistre parfois avec une marque d'ordre des octets (BOM).
+        for line in text.trim_start_matches('\u{feff}').lines() {
             let line = line.trim();
             if line.starts_with('#') || line.starts_with(';') {
                 continue;
@@ -190,6 +191,11 @@ mod tests {
         assert_eq!(Config::parse("fps = ecran").fps, FPS_ECRAN);
         assert_eq!(Config::parse("fps = illimite").fps, FPS_ILLIMITE);
         assert_eq!(Config::parse("fps = 0").fps, FPS_ECRAN);
+    }
+
+    #[test]
+    fn marque_bom() {
+        assert_eq!(Config::parse("\u{feff}fond = horizon\nfps = 24\n").fond, "horizon");
     }
 
     #[test]

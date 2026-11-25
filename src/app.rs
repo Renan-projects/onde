@@ -359,7 +359,8 @@ fn load_shader() {
 /// à la taille de l'écran principal.
 fn refresh_lockscreen(file: String, src: String) {
     let (on, mons) = with(|a| (a.cfg.verrouillage, a.mons.clone()));
-    if !on {
+    // Mode administrateur (ActiverEcranVerrouillage.cmd) : toujours tenir le fichier à jour.
+    if !on && lockscreen::csp_path().is_none() {
         return;
     }
     let mons = if mons.is_empty() { desktop::monitors() } else { mons };

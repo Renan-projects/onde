@@ -38,10 +38,15 @@ l'écran de verrouillage, à chaque changement de fond puis toutes les heures.
 Sans droits administrateur (API `Windows.System.UserProfile.LockScreen`).
 L'image d'origine est sauvegardée et remise quand on décoche l'option.
 
-> **État actuel** : sur Windows 11 26H2 (build 26300), Windows laisse expirer la
-> demande quand elle vient d'une application non empaquetée ; l'image n'est donc pas
-> encore posée sur ce système. Onde réessaie toutes les heures. Pistes et essais :
-> [docs/ECRAN_DE_VERROUILLAGE.md](docs/ECRAN_DE_VERROUILLAGE.md).
+> **Si l'image ne change pas** (Windows 11 26H2 : la demande expire quand elle vient
+> d'une application non empaquetée — c'est le cas sur le PC de développement) :
+> lancer **une seule fois** `ActiverEcranVerrouillage.cmd` (fourni dans le zip) par
+> clic droit → *Exécuter en tant qu'administrateur*. Il règle la stratégie Windows
+> PersonalizationCSP sur `C:\ProgramData\Onde\ecran-verrouillage.png`, fichier
+> qu'Onde réécrit ensuite seul à chaque changement de fond et toutes les heures,
+> sans plus jamais demander de droits. `DesactiverEcranVerrouillage.cmd` (aussi en
+> administrateur) annule. Tant que ce mode est actif, l'image n'est plus réglable
+> dans Paramètres. Détails : [docs/ECRAN_DE_VERROUILLAGE.md](docs/ECRAN_DE_VERROUILLAGE.md).
 
 Limites de Windows : l'écran de verrouillage appartient à LockApp, sur un
 bureau protégé où aucune application ne peut dessiner ; il ne peut donc pas

@@ -62,7 +62,28 @@ Coût : quelques centaines de millisecondes de CPU/GPU une fois par heure.
   heures (coût négligeable : un thread qui attend 30 s), au cas où une mise à jour de
   Windows corrige le service.
 
-## Pistes qui marcheraient (décision de Renan)
+## Mode administrateur (retenu, prêt)
+
+`scripts/ActiverEcranVerrouillage.cmd`, lancé une fois en administrateur :
+
+1. crée `C:\ProgramData\Onde\` et donne aux Utilisateurs le droit de modifier son contenu ;
+2. y place une première image (la dernière d'Onde, sinon l'image d'origine sauvegardée) ;
+3. écrit `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP` :
+   `LockScreenImagePath` et `LockScreenImageUrl` → `C:\ProgramData\Onde\ecran-verrouillage.png`,
+   `LockScreenImageStatus = 1`.
+
+Onde lit cette clé avant chaque mise à jour : si elle désigne **son** fichier (nom
+`ecran-verrouillage.png` dans un dossier `Onde` — une image imposée par une stratégie
+d'entreprise n'est jamais touchée), il réécrit ce fichier (PNG écrit à côté puis
+renommé, jamais à moitié écrit) au lieu d'appeler l'API WinRT, et ce même si l'option
+du menu est décochée. Vérifié sans droits (variable `ONDE_VERROU_CHEMIN` qui simule la
+clé) : image 1920×1080 écrite en 0,8 s.
+
+Non vérifiable sans droits administrateur : que Windows relise le fichier à chaque
+verrouillage plutôt qu'à l'application de la stratégie seulement.
+`DesactiverEcranVerrouillage.cmd` (en administrateur) supprime les trois valeurs.
+
+## Autres pistes
 
 1. **PersonalizationCSP avec droits admin, une seule fois** : une commande élevée (UAC)
    écrit `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP`

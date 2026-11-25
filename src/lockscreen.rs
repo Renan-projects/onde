@@ -6,6 +6,12 @@
 //! `Windows.System.UserProfile.LockScreen`, qui fonctionne sans droits
 //! administrateur depuis une application de bureau. L'image d'origine est
 //! sauvegardée la première fois et remise quand l'option est désactivée.
+//!
+//! Sur certains Windows, cette API n'aboutit jamais depuis une application
+//! non empaquetée. Mode « administrateur » : si la clé
+//! `HKLM\…\PersonalizationCSP\LockScreenImagePath` existe (posée une fois par
+//! `ActiverEcranVerrouillage.cmd`), Onde se contente de réécrire ce fichier,
+//! sans droits ni API WinRT.
 
 use crate::util::{data_dir, WStr};
 use std::path::{Path, PathBuf};
@@ -59,6 +65,9 @@ pub fn update(id: String, source: String, w: u32, h: u32) {
 pub fn restore() {
     let _ = std::thread::Builder::new().name("verrouillage".into()).spawn(|| {
         let r = (|| -> Result<(), String> {
+            if let Some(p) = csp_path() {
+                return Err(format!("mode administrateur ({}) : lancer DesactiverEcranVerrouillage.cmd", p.display()));
+            }
             init_com();
             let saved = std::fs::read_to_string(backup_marker()).map_err(|_| "aucune sauvegarde".to_string())?;
             let path = PathBuf::from(saved.trim());
@@ -79,13 +88,62 @@ fn init_com() {
     }
 }
 
-fn apply(id: &str, source: &str, w: u32, h: u32) -> Result<PathBuf, String> {
-    init_com();
-    backup_original()?;
+const CSP_FILE: &str = "ecran-verrouillage.png";
+const CSP_KEY: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP";
+
+/// Fichier imposé par la stratégie PersonalizationCSP, s'il y en a une.
+/// `ONDE_VERROU_CHEMIN` la simule (tests sans droits administrateur).
+pub fn csp_path() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("ONDE_VERROU_CHEMIN") {
+        return Some(PathBuf::from(p));
+    }
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+    let mut buf = [0u16; 1024];
+    let mut size = (buf.len() * 2) as u32;
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            WStr::new(CSP_KEY).pcwstr(),
+            WStr::new("LockScreenImagePath").pcwstr(),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr() as *mut _),
+            Some(&mut size),
+        )
+    };
+    if r.is_err() {
+        return None;
+    }
+    let n = buf.iter().position(|&c| c == 0).unwrap_or(0);
+    let s = String::from_utf16_lossy(&buf[..n]);
+    let path = PathBuf::from(s.trim());
+    // Seulement le fichier posé par ActiverEcranVerrouillage.cmd : une image
+    // imposée par une stratégie d'entreprise n'est jamais touchée.
+    let ours = path.file_name().is_some_and(|f| f.eq_ignore_ascii_case(CSP_FILE))
+        && path.parent().and_then(|d| d.file_name()).is_some_and(|d| d.eq_ignore_ascii_case("Onde"));
+    ours.then_some(path)
+}
+
+fn render(id: &str, source: &str, w: u32, h: u32) -> Result<Vec<u8>, String> {
     // Moment de l'animation : varie d'une fois sur l'autre, reste reproductible.
     let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
     let time = 20.0 + (t.wMinute as f32 * 60.0 + t.wSecond as f32) % 900.0;
-    let pixels = crate::render::snapshot(source, id, w, h, time, true)?;
+    crate::render::snapshot(source, id, w, h, time, true)
+}
+
+fn apply(id: &str, source: &str, w: u32, h: u32) -> Result<PathBuf, String> {
+    init_com();
+    if let Some(path) = csp_path() {
+        // Mode administrateur : Windows lit lui-même ce fichier. Écriture dans un
+        // fichier voisin puis remplacement, pour ne jamais exposer un PNG à moitié écrit.
+        let pixels = render(id, source, w, h)?;
+        let tmp = path.with_extension("tmp.png");
+        write_png(&tmp, w, h, &pixels)?;
+        std::fs::rename(&tmp, &path).map_err(|e| format!("{} : {e}", path.display()))?;
+        return Ok(path);
+    }
+    backup_original()?;
+    let pixels = render(id, source, w, h)?;
     // Deux noms en alternance : Windows ne relit pas toujours un fichier de même nom.
     let a = data_dir().join("verrouillage-a.png");
     let b = data_dir().join("verrouillage-b.png");

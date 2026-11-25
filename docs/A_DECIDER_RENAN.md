@@ -22,10 +22,14 @@ Décisions prises par défaut pendant la série 0.2.0 ; chacune se change en une
 5. **Ta config actuelle** : `fps = 60`, `echelle = 100`. Avec la levée des bornes, `fps = ecran`
    fait la même chose sur tes écrans 60 Hz et suivrait un écran 144 Hz si tu en changes.
 
-6. **Écran de verrouillage : Windows refuse depuis une appli non empaquetée.** Même avec
-   85 Go libres, `SetImageFileAsync` expire après 30 s à chaque essai (5 variantes testées,
-   détail dans `docs/ECRAN_DE_VERROUILLAGE.md`). Trois pistes :
-   a. **droits admin une fois** (PersonalizationCSP, UAC) — l'image devient imposée ;
-   b. **empaqueter Onde en MSIX** (identité de paquet) — demande un certificat ;
-   c. **manuel** : Paramètres → Écran de verrouillage → `%APPDATA%\Ondeerrouillage-a.png`.
-   → Laquelle ? En attendant, Onde réessaie toutes les heures sans gêne.
+6. **Écran de verrouillage : prêt, il te reste un clic.** Windows refuse la méthode sans
+   droits depuis une appli non empaquetée (même avec 85 Go libres : 5 variantes testées,
+   voir `docs/ECRAN_DE_VERROUILLAGE.md`). Solution préparée :
+   **clic droit sur `scripts\ActiverEcranVerrouillage.cmd` (aussi dans le zip de la release)
+   → Exécuter en tant qu'administrateur, une seule fois.** Ensuite Onde réécrit
+   `C:\ProgramData\Onde\ecran-verrouillage.png` tout seul (vérifié sans droits : 0,8 s,
+   sans aucun appel bloquant). Annuler : `DesactiverEcranVerrouillage.cmd`, en admin.
+   Contrepartie : tant que c'est actif, l'image n'est plus modifiable dans Paramètres.
+   À vérifier par toi après le clic : verrouiller (Win+L) et regarder ; puis changer de
+   fond, reverrouiller — si l'image ne suit pas, Windows ne relit le fichier qu'à
+   l'application de la stratégie (dis-le-moi, il y a des parades).

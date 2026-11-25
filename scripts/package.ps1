@@ -9,6 +9,8 @@ Copy-Item "$root\target\release\onde.exe" $stage
 Copy-Item "$root\README.md" $stage
 Copy-Item "$root\LICENSE" $stage
 Copy-Item "$root\fonds\exemple.hlsl" $stage
+Copy-Item "$root\scripts\ActiverEcranVerrouillage.cmd" $stage
+Copy-Item "$root\scripts\DesactiverEcranVerrouillage.cmd" $stage
 $zip = Join-Path $root "dist\onde-$version-windows-x64.zip"
 Remove-Item -Force $zip -ErrorAction SilentlyContinue
 Compress-Archive -Path "$stage\*" -DestinationPath $zip
